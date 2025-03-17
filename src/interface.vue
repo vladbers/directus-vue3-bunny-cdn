@@ -25,7 +25,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watchEffect, onMounted } from "vue";
+import { ref, watchEffect, onMounted, inject } from "vue";
 
 const props = defineProps({
   folder: {
@@ -59,19 +59,47 @@ const apiGetUrl = ref('__CDN_API_GET_URL__');
 const fileName = ref('');
 const uploadProgress = ref(false);
 
-let folder = '';
+// Добавляем функцию для получения ID документа
+const getCurrentItemId = () => {
+  // Пытаемся получить primaryKey из props
+  if (props.primaryKey && props.primaryKey !== '+') {
+    console.log('Using primaryKey from props:', props.primaryKey);
+    return props.primaryKey;
+  }
+  
+  // Пробуем извлечь ID из URL
+  try {
+    const currentPath = window.location.pathname;
+    const pathParts = currentPath.split('/');
+    // URL формата /admin/content/CollectionName/ID
+    // ID будет последней частью URL
+    const possibleId = pathParts[pathParts.length - 1];
+    
+    if (possibleId && !isNaN(Number(possibleId))) {
+      console.log('Extracted ID from URL:', possibleId);
+      return possibleId;
+    }
+  } catch (error) {
+    console.error('Error extracting ID from URL:', error);
+  }
+  
+  // Если не получилось, возвращаем пустую строку или null
+  return null;
+};
+
+// Получаем ID документа
+const itemId = getCurrentItemId();
 
 // Формируем путь в нужном формате: /data-model-name/id-document
+let folder = '';
+
 if (props.collection) {
   folder = props.collection; // data-model-name
   
-  if (props.primaryKey) {
-    const keyString = String(props.primaryKey);
-    if (keyString && keyString !== '+') {
-      folder = `${folder}/${keyString}`; // data-model-name/id-document
-    } else {
-      console.warn('Некорректный primaryKey:', keyString);
-    }
+  if (itemId) {
+    folder = `${folder}/${itemId}`; // data-model-name/id-document
+  } else {
+    console.warn('Не удалось получить ID документа');
   }
 }
 
@@ -81,7 +109,8 @@ if (props.folder) {
 }
 
 console.log('Folder path:', folder);
-console.log('Primary key:', props.primaryKey);
+console.log('Collection:', props.collection);
+console.log('Item ID:', itemId);
 
 const toggleProgress = () => uploadProgress.value = !uploadProgress.value;
 
