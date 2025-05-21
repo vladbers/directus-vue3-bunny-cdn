@@ -5,20 +5,23 @@
     </div>
     
     <div class="upload-container">
-      <label for="file-upload" class="custom-file-upload">
+      <label :for="uniqueId" class="custom-file-upload">
         <v-icon name="upload" left />
         Upload file to Bunny CDN
       </label>
       <input
-        id="file-upload"
+        :id="uniqueId"
         type="file"
+        multiple
         style="display: none;"
-        @change="handleFileInput($event.target.files)"
+        @change="handleFileInput(($event.target as HTMLInputElement).files)"
       />
       
-      <div class="file-info" v-if="fileName">
+      <div class="file-info" v-if="fileNames.length > 0">
         <v-icon name="description" />
-        <span class="file-name">{{ fileName }}</span>
+        <ul>
+          <li v-for="name in fileNames" :key="name" class="file-name">{{ name }}</li>
+        </ul>
       </div>
     </div>
   </div>
@@ -26,6 +29,7 @@
 
 <script setup lang="ts">
 import { ref, watchEffect, onMounted, inject } from "vue";
+import { nanoid } from 'nanoid';
 
 const props = defineProps({
   folder: {
@@ -56,10 +60,11 @@ const apiUrl = ref('__CDN_API_URL__');
 const apiKey = ref('__CDN_API_KEY__');
 const apiGetUrl = ref('__CDN_API_GET_URL__');
 
-const fileName = ref('');
+const fileNames = ref<string[]>([]);
 const uploadProgress = ref(false);
+const uniqueId = ref('');
 
-// Добавляем функцию для получения ID документа
+// Добавляем функцию для получения ID
 const getCurrentItemId = () => {
   // Пытаемся получить primaryKey из props
   if (props.primaryKey && props.primaryKey !== '+') {
@@ -120,18 +125,32 @@ const getFileExtension = (filename: string): string => {
   return parts.length > 1 ? parts.pop() || '' : '';
 };
 
-const setFileNameFromUrl = (url: string | null) => {
-  if (!url) {
-    fileName.value = '';
+const setFileNamesFromValue = (value: string | null) => {
+  if (!value) {
+    fileNames.value = [];
     return;
   }
-  
   try {
-    const urlParts = url.split('/');
-    fileName.value = urlParts[urlParts.length - 1];
+    const urls = JSON.parse(value);
+    if (Array.isArray(urls)) {
+      fileNames.value = urls.map(url => {
+        const urlParts = url.split('/');
+        return urlParts[urlParts.length - 1];
+      });
+    } else {
+      // Handle single string value for backward compatibility
+      const urlParts = value.split('/');
+      fileNames.value = [urlParts[urlParts.length - 1]];
+    }
   } catch (error) {
-    console.error('Ошибка при извлечении имени файла:', error);
-    fileName.value = '';
+    // If parsing fails, assume it's a single URL (old format)
+    try {
+      const urlParts = value.split('/');
+      fileNames.value = [urlParts[urlParts.length - 1]];
+    } catch (e) {
+      console.error('Ошибка при извлечении имени файла:', e);
+      fileNames.value = [];
+    }
   }
 };
 
@@ -206,45 +225,57 @@ async function send(id: string, body: File): Promise<string> {
 /**
  * Обработчик выбора файла
  */
-async function handleFileInput(files) {
+async function handleFileInput(files: FileList | null) {
   if (files && files.length > 0) {
-    try {
-      const file = files[0];
-      const originalFileName = file.name;
-      
-      // Получаем имя файла без расширения
-      const nameParts = originalFileName.split('.');
-      const extension = nameParts.pop() || '';
-      const nameWithoutExt = nameParts.join('.');
-      
-      // Форматируем имя файла (без расширения)
-      const formattedName = generateFileName(nameWithoutExt);
-      
-      const timestamp = (new Date()).getTime().toString();
-      const hash = generateSignature(formattedName, timestamp);
-      
-      // Создаем имя файла в формате "name-hash.extension"
-      const id = `${formattedName}-${hash}.${extension}`;
-      
-      fileName.value = id; // Сохраняем имя файла
-      
-      const url = await send(id, file);
-      emit('input', url);
-    } catch (error) {
-      console.error('Ошибка при обработке файла:', error);
+    const uploadedUrls: string[] = [];
+    // Сбрасываем fileNames перед загрузкой новых файлов
+    fileNames.value = []; 
+
+    for (const file of Array.from(files)) {
+      try {
+        const originalFileName = file.name;
+        
+        // Получаем имя файла без расширения
+        const nameParts = originalFileName.split('.');
+        const extension = nameParts.pop() || '';
+        const nameWithoutExt = nameParts.join('.');
+        
+        // Форматируем имя файла (без расширения)
+        const formattedName = generateFileName(nameWithoutExt);
+        
+        const timestamp = (new Date()).getTime().toString();
+        const hash = generateSignature(formattedName, timestamp);
+        
+        // Создаем имя файла в формате "name-hash.extension"
+        const id = `${formattedName}-${hash}.${extension}`;
+        
+        fileNames.value.push(id); // Добавляем имя файла в список для отображения
+        
+        const url = await send(id, file);
+        uploadedUrls.push(url);
+      } catch (error) {
+        console.error('Ошибка при обработке файла:', error);
+        // Удаляем имя файла из списка, если загрузка не удалась
+        const failedFileName = fileNames.value.pop(); 
+        console.warn(`Файл ${failedFileName} не был загружен.`);
+      }
+    }
+    if (uploadedUrls.length > 0) {
+      emit('input', JSON.stringify(uploadedUrls));
     }
   }
 }
 
 watchEffect(() => {
   if (props.value) {
-    setFileNameFromUrl(props.value);
+    setFileNamesFromValue(props.value);
   }
 });
 
 onMounted(() => {
+  uniqueId.value = `file-upload-${nanoid(5)}`;
   if (props.value) {
-    setFileNameFromUrl(props.value);
+    setFileNamesFromValue(props.value);
   }
 });
 </script>
@@ -293,6 +324,16 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+#bunny-upload-directus .file-info ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+#bunny-upload-directus .file-info li {
+  margin-bottom: 5px;
 }
 
 #bunny-upload-directus .file-name {
